@@ -33,8 +33,9 @@ python -m playwright install chromium
 # 3a. Set your Gemini API key (PowerShell)
 $env:GEMINI_API_KEY="your-api-key-here"
 
-# 3b. OR create a .env file with:
+# 3b. OR create a .env file (you can start from .env.example) with:
 # GEMINI_API_KEY=your-api-key-here
+# GEMINI_MODEL=gemini-2.0-flash (optional, overrides the default model)
 ```
 
 ## Usage

@@ -1,0 +1,8 @@
+[
+  {
+    "description": "Go to https://example.com and get the page title"
+  },
+  {
+    "description": "Go to https://playwright.dev and find the version number shown on the homepage"
+  }
+]

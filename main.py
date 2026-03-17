@@ -15,6 +15,7 @@ import argparse
 import json
 import sys
 
+from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
 from agent import create_model, run_task
@@ -29,6 +30,8 @@ def load_tasks(path: str) -> list[dict]:
 
 
 def main() -> int:
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description="Agentic browser demo with Playwright + Gemini")
     parser.add_argument(
         "--tasks",

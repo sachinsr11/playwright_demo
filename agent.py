@@ -14,11 +14,14 @@ Supported Gemini actions (returned as JSON by the model):
 
 import json
 import os
+import re
 from playwright.sync_api import Page
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 MAX_AGENT_STEPS = 20
 MAX_PAGE_TEXT_LENGTH = 1000
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite"
 
 _SYSTEM_PROMPT = """You are a browser automation assistant.
 Given a task description and the current page state (URL + visible text),
@@ -36,6 +39,48 @@ Rules:
 - Use "done" when the task is complete or you have the answer.
 - Keep selectors simple and robust (e.g. "h1", "a[href*='download']").
 """
+
+
+class _AdapterResponse:
+    """Simple response wrapper so run_task can keep using response.text."""
+
+    def __init__(self, text: str):
+        self.text = text
+
+
+class GeminiModelAdapter:
+    """Compatibility layer that exposes generate_content like the old SDK."""
+
+    def __init__(self, client: genai.Client, model_name: str):
+        self._client = client
+        self._model_name = model_name
+
+    def generate_content(self, messages: list[dict], generation_config: dict | None = None):
+        response_mime_type = "application/json"
+        if generation_config and generation_config.get("response_mime_type"):
+            response_mime_type = generation_config["response_mime_type"]
+
+        prompt = _messages_to_prompt(messages)
+        response = self._client.models.generate_content(
+            model=self._model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type=response_mime_type,
+                system_instruction=_SYSTEM_PROMPT,
+            ),
+        )
+        return _AdapterResponse((response.text or "").strip())
+
+
+def _messages_to_prompt(messages: list[dict]) -> str:
+    """Flatten role/parts messages into a prompt string for google.genai."""
+    chunks = []
+    for message in messages:
+        role = str(message.get("role", "user")).upper()
+        parts = message.get("parts", [])
+        text = "\n".join(str(part) for part in parts)
+        chunks.append(f"{role}:\n{text}")
+    return "\n\n".join(chunks)
 
 
 def _page_state(page: Page) -> str:
@@ -65,10 +110,13 @@ def run_task(page: Page, task: str, model) -> str:
     ]
 
     for _ in range(MAX_AGENT_STEPS):  # safety cap
-        response = model.generate_content(
-            messages,
-            generation_config={"response_mime_type": "application/json"},
-        )
+        try:
+            response = model.generate_content(
+                messages,
+                generation_config={"response_mime_type": "application/json"},
+            )
+        except Exception as exc:
+            return _run_fallback_task(page, task, str(exc))
         raw = response.text.strip()
 
         try:
@@ -77,6 +125,7 @@ def run_task(page: Page, task: str, model) -> str:
             return f"Agent returned invalid JSON: {raw}"
 
         action_type = action.get("action")
+        print(f"[Agent] Action: {action_type}")
 
         if action_type == "navigate":
             page.goto(action["url"], wait_until="domcontentloaded")
@@ -104,16 +153,37 @@ def run_task(page: Page, task: str, model) -> str:
     return "Max steps reached without completion."
 
 
-def create_model(api_key: str | None = None) -> genai.GenerativeModel:
-    """Configure and return a Gemini GenerativeModel."""
+def _run_fallback_task(page: Page, task: str, reason: str) -> str:
+    """Run a tiny deterministic fallback flow when Gemini is unavailable."""
+    lowered = task.lower()
+    url_match = re.search(r"https?://\S+", task)
+
+    if url_match:
+        url = url_match.group(0).rstrip(".,)")
+        print(f"[Agent] Fallback action: navigate -> {url}")
+        page.goto(url, wait_until="domcontentloaded")
+
+    if "title" in lowered:
+        title = page.title()
+        return (
+            "Gemini unavailable (quota/API issue), fallback executed. "
+            f"Page title: {title}."
+        )
+
+    return (
+        "Gemini unavailable (quota/API issue), fallback executed basic navigation. "
+        f"Reason: {reason}"
+    )
+
+
+def create_model(api_key: str | None = None) -> GeminiModelAdapter:
+    """Configure and return a Gemini model adapter based on google.genai."""
     key = api_key or os.environ.get("GEMINI_API_KEY")
+    model_name = os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
     if not key:
         raise ValueError(
             "A Gemini API key is required. "
             "Set the GEMINI_API_KEY environment variable or pass api_key='<your-key>'."
         )
-    genai.configure(api_key=key)
-    return genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
-        system_instruction=_SYSTEM_PROMPT,
-    )
+    client = genai.Client(api_key=key)
+    return GeminiModelAdapter(client=client, model_name=model_name)

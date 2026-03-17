@@ -28,10 +28,13 @@ playwright_demo/
 pip install -r requirements.txt
 
 # 2. Install Playwright browsers
-playwright install chromium
+python -m playwright install chromium
 
-# 3. Set your Gemini API key
-export GEMINI_API_KEY="your-api-key-here"
+# 3a. Set your Gemini API key (PowerShell)
+$env:GEMINI_API_KEY="your-api-key-here"
+
+# 3b. OR create a .env file with:
+# GEMINI_API_KEY=your-api-key-here
 ```
 
 ## Usage
